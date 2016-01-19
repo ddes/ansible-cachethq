@@ -1,0 +1,157 @@
+---
+# Tasks for PKG install
+
+   - name: Update and Install base packages + Dependencies
+     apt:  name={{ item }} state=present update_cache=yes
+     with_items:
+      - apache2
+      - mysql-server
+      - python-apt
+      - python-software-properties
+      - software-properties-common
+      - python-mysqldb
+      - git-core
+      - vim
+      - curl
+
+#   - name: Add apt key.
+#     apt_key: 
+#       url: 
+#       state: present
+#
+   - name: Add repository.
+     apt_repository:
+       repo: 'ppa:ondrej/php5-5.6'
+       state: present
+       update_cache: yes
+
+   - name: Install php5.6 packages
+     apt:  name={{ item }} state=present
+     with_items:
+      - php5
+      - php-pear
+      - php5-mysql
+      - php5-mcrypt
+      - php5-apcu
+      - php5-cli
+      - php-db
+      - php5-intl
+      - php5-readline      
+      - php5-gd
+
+
+   - name: Download/Install Composer
+     shell: chdir=/usr/local/bin curl -sS https://getcomposer.org/installer|php
+     register: curl_result
+   
+
+   - name: rename binary
+     command: chdir=/usr/local/bin mv composer.phar composer
+   
+   - name: Fixing composer permissions
+     file: path=/usr/local/bin/composer state=file mode=755 
+
+#   - name: Rm git directory if present
+#     file: path=/var/www/Cachet state=absent
+#     register: rm_dir
+
+##########################################################################################
+########################### MYSQL ########################################################
+
+   - name: Start the MySQL service
+     action: service name=mysql state=started
+
+
+   - name: update mysql root password for all root accounts
+     mysql_user:
+       name: root
+       host: "{{ item }}"
+       password: "root"
+       priv: "*.*:ALL,GRANT"
+     with_items:
+       - "{{ ansible_hostname }}"
+       - 127.0.0.1
+       - ::1
+       - localhost
+
+   - name: copy .my.cnf file with root password credentials
+     copy: src=my.cnf dest=/root/.my.cnf owner=root mode=0600
+
+
+   - name: Create databases
+     mysql_db: name=cachet state=present
+
+   - name: Create user cachet
+     mysql_user:
+       name=cachet
+       password=cachet
+       priv=cachet.*:ALL
+       state=present
+       append_privs=yes
+
+
+############################################################################################
+############################################################################################
+
+
+   - name: Git clone cachet
+     command: "git clone https://github.com/cachethq/Cachet.git /var/www/Cachet"
+     register: clone_cachet
+     changed_when: "clone_cachet.rc == 0"
+     failed_when: "not (('already exists and is not an empty directory.' in clone_cachet.stderr) or ('Cloning into' in clone_cachet.stderr))"
+     ignore_errors: yes
+
+
+#   - name: Apache2 config file
+#     copy: src=000-default.conf dest=/etc/apache2/sites-available/000-default.conf mode=0644 
+
+
+   - name: Apache2 config file
+     copy: src=cachethq.conf dest=/etc/apache2/sites-available/cachethq.conf mode=0644 
+
+   - name: setting php env
+     copy: src=cachet-environment.conf dest=/etc/apache2/conf-available/cachet-environment.conf mode=0644 
+
+
+   - name: a2enconf cachet-environment 
+     command: a2enconf cachet-environment.conf
+     args:
+       creates: /etc/apache2/conf-enabled/cachet-environment.conf
+
+
+   - name: a2enmod rewrite
+     command: a2enmod rewrite
+     args:
+       creates: /etc/apache2/mods-enabled/rewrite.load
+   
+   - name: Cachet php env
+     copy: src=.env.local.php dest=/var/www/Cachet/.env.local.php
+
+
+   - name: Cachet php env
+     copy: src=.env dest=/var/www/Cachet/.env
+   
+
+   - name : Composer install
+     command: chdir=/var/www/Cachet /usr/local/bin/composer install --no-dev -o
+
+   - name: php artisan migrate
+     command: chdir=/var/www/Cachet php artisan migrate
+
+   - name: generate security key
+     command: chdir=/var/www/Cachet php artisan key:generate
+
+   - name: clear & config cache
+     command: chdir=/var/www/Cachet php artisan config:cache
+
+   - name : Fixing apache2 permissions
+     file: path=/var/www/Cachet state=directory mode=755 owner=www-data group=www-data recurse=yes
+
+   - name: a2ensite cachethq
+     command: a2ensite cachethq.conf
+     args:
+       creates: /etc/apache2/sites-enabled/cachethq.conf
+
+
+   - name: apache2
+     service: name=apache2 state=restarted

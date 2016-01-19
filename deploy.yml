@@ -1,0 +1,6 @@
+---
+
+- hosts: status
+  gather_facts: yes
+  roles:
+    - role: cachet
